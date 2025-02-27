@@ -10,6 +10,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.37.0",
     "@supabase/supabase-js": "^2.49.1",
     "hono": "^4.7.2"
   }
