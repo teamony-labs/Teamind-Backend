@@ -17,6 +17,8 @@ build/
 .env.test.local
 .env.production.local
 
+.dev.vars
+
 # logs
 logs
 *.log
@@ -37,4 +39,7 @@ coverage/
 
 # other
 .tmp/
-.cache/ 
+.cache/
+
+# cursor history
+.specstory
