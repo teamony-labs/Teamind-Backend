@@ -2,15 +2,14 @@ name = "teamind-backend"
 main = "src/index.ts"
 compatibility_date = "2023-11-21"
 
-[vars]
-SUPABASE_URL = ""
-SUPABASE_ANON_KEY = ""
-ANTHROPIC_API_KEY = ""
-
 [[r2_buckets]]
 binding = "VIDEO_BUCKET"
 bucket_name = "teamind-videos"
 preview_bucket_name = "teamind-videos-dev"
 
 [triggers]
-crons = [] 
+crons = []
+
+# Compatibility flags
+# Docs: https://developers.cloudflare.com/workers/configuration/compatibility-dates
+compatibility_flags = ["nodejs_compat"]
