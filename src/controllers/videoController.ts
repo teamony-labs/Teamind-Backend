@@ -5,6 +5,7 @@ import { HTTPException } from 'hono/http-exception';
 import { getUser } from '../utils/auth';
 import { StorageService } from '../services/storageService';
 import { WhisperService } from '../services/whisperService';
+import { EdgeFunctionThumbnailService } from '../services/edge-function-thumbnail';
 // 動画アップロードのバリデーションスキーマ
 const uploadVideoSchema = z.object({
   title: z
@@ -59,22 +60,43 @@ export const videoController = {
       // 各動画の署名付きURLを更新
       for (const video of data) {
         try {
+          // 動画ファイルのURLを更新
           video.file_url = await storageService.getSignedUrl(video.file_path);
+
+          // サムネイルURLを更新（存在する場合）
+          if (video.thumbnail_path) {
+            const thumbnailUrl = await storageService.getThumbnailSignedUrl(
+              video.thumbnail_path
+            );
+            if (thumbnailUrl) {
+              video.thumbnail_url = thumbnailUrl;
+            }
+          }
         } catch (error) {
-          console.error(`動画ID ${video.id} の署名付きURL更新エラー:`, error);
+          console.error(`動画ID ${video.id} のURL更新エラー:`, error);
           // エラーが発生しても処理を続行
         }
       }
     }
 
-    return c.json({ videos: data });
+    // フロントエンドで期待される形式に変換（thumbnail_url → thumbnailUrl）
+    return c.json({
+      videos: data.map((video) => ({
+        ...video,
+        thumbnailUrl: video.thumbnail_url || null,
+      })),
+    });
   },
 
   // 動画のアップロード
   async uploadVideo(c: Context) {
     try {
+      console.log('動画アップロード処理を開始します');
       const user = getUser(c);
+      console.log('ユーザー認証成功:', user.id);
+
       const formData = await c.req.formData();
+      console.log('フォームデータを受信しました');
 
       // フォームデータからフィールドを取得
       const title = formData.get('title') as string;
@@ -82,54 +104,92 @@ export const videoController = {
       const tagsJson = (formData.get('tags') as string) || '[]';
       const videoFile = formData.get('video');
 
+      console.log('フォームデータ:', {
+        title,
+        description:
+          description.substring(0, 20) + (description.length > 20 ? '...' : ''),
+        tagsJson,
+        videoFile: videoFile ? 'あり' : 'なし',
+      });
+
       // バリデーション
       if (!videoFile || typeof videoFile === 'string') {
+        console.error('動画ファイルがありません');
         throw new HTTPException(400, { message: '動画ファイルは必須です' });
       }
 
       // ここでFile型として扱う
       const file = videoFile as File;
+      console.log('動画ファイル情報:', {
+        name: file.name,
+        size: file.size,
+        type: file.type,
+      });
 
       // メタデータのバリデーション
       const tags = JSON.parse(tagsJson);
+      console.log('タグ:', tags);
+
       const validatedData = uploadVideoSchema.parse({
         title,
         description,
         tags,
       });
+      console.log('バリデーション成功');
 
       // ストレージサービスの初期化
+      console.log('ストレージサービスを初期化します');
       const storageService = new StorageService(
         c.env.SUPABASE_URL,
         c.env.SUPABASE_ANON_KEY
       );
 
-      // 動画のアップロード
-      const { filePath, fileUrl } = await storageService.uploadVideo(
-        user.id,
-        file
-      );
+      // 動画のアップロード（サムネイル生成も含む）
+      console.log('動画のアップロードを開始します');
+      const { filePath, fileUrl, thumbnailPath, thumbnailUrl } =
+        await storageService.uploadVideo(user.id, file);
+      console.log('動画アップロード成功:', {
+        filePath,
+        thumbnailPath: thumbnailPath || 'なし',
+      });
 
       // Supabaseにメタデータを保存
+      console.log('Supabaseクライアントを初期化します');
       const supabase = createClient(
         c.env.SUPABASE_URL,
         c.env.SUPABASE_ANON_KEY
       );
+
+      // 保存するデータを準備
+      const videoData = {
+        title: validatedData.title,
+        description: validatedData.description,
+        tags: validatedData.tags,
+        file_path: filePath,
+        file_url: fileUrl, // 署名付きURL（一時的）
+        file_name: file.name,
+        file_size: file.size,
+        file_type: file.type,
+        user_id: user.id,
+        status: 'uploaded',
+        progress: 0, // 進捗を0に設定
+      };
+
+      // サムネイル情報がある場合のみ追加
+      if (thumbnailPath && thumbnailUrl) {
+        console.log('サムネイル情報を追加します');
+        // @ts-ignore - テーブルにカラムが存在するかチェック
+        videoData.thumbnail_path = thumbnailPath;
+        // @ts-ignore - テーブルにカラムが存在するかチェック
+        videoData.thumbnail_url = thumbnailUrl;
+      } else {
+        console.log('サムネイル情報はありません');
+      }
+
+      console.log('動画メタデータをデータベースに保存します');
       const { data, error } = await supabase
         .from('videos')
-        .insert({
-          title: validatedData.title,
-          description: validatedData.description,
-          tags: validatedData.tags,
-          file_path: filePath,
-          file_url: fileUrl, // 署名付きURL（一時的）
-          file_name: file.name,
-          file_size: file.size,
-          file_type: file.type,
-          user_id: user.id,
-          status: 'uploaded',
-          progress: 0, // 進捗を0に設定
-        })
+        .insert(videoData)
         .select()
         .single();
 
@@ -140,7 +200,42 @@ export const videoController = {
         });
       }
 
-      return c.json({ video: data }, 201);
+      console.log('動画メタデータ保存成功:', data.id);
+      // サムネイル生成処理を追加
+      const edgeFunctionService = new EdgeFunctionThumbnailService(
+        c.env.SUPABASE_URL,
+        c.env.SUPABASE_ANON_KEY
+      );
+
+      // サムネイル生成を開始
+      const thumbnailResult = await edgeFunctionService.generateThumbnail(
+        data.id,
+        filePath,
+        user.id
+      );
+
+      if (thumbnailResult) {
+        // サムネイル情報をデータベースに保存
+        await supabase
+          .from('videos')
+          .update({
+            thumbnail_path: thumbnailResult.thumbnailPath,
+            thumbnail_url: thumbnailResult.thumbnailUrl,
+          })
+          .eq('id', data.id);
+      }
+
+      // レスポンスにサムネイル情報を含める
+      return c.json(
+        {
+          video: {
+            ...data,
+            thumbnail_path: thumbnailResult?.thumbnailPath,
+            thumbnail_url: thumbnailResult?.thumbnailUrl,
+          },
+        },
+        201
+      );
     } catch (error) {
       if (error instanceof z.ZodError) {
         return c.json({ error: error.errors }, 400);
@@ -178,8 +273,19 @@ export const videoController = {
     );
 
     try {
+      // 動画ファイルのURLを更新
       const signedUrl = await storageService.getSignedUrl(video.file_path);
       video.file_url = signedUrl;
+
+      // サムネイルURLを更新（存在する場合）
+      if (video.thumbnail_path) {
+        const thumbnailUrl = await storageService.getThumbnailSignedUrl(
+          video.thumbnail_path
+        );
+        if (thumbnailUrl) {
+          video.thumbnail_url = thumbnailUrl;
+        }
+      }
     } catch (error) {
       console.error('署名付きURL更新エラー:', error);
       // URLの更新に失敗しても、他の情報は返す
@@ -206,13 +312,17 @@ export const videoController = {
       throw new HTTPException(404, { message: '動画が見つかりません' });
     }
 
-    // ストレージからファイルを削除
-    const { error: storageError } = await supabase.storage
-      .from('videos')
-      .remove([video.file_path]); // file_pathを直接使用
+    // ストレージサービスを初期化
+    const storageService = new StorageService(
+      c.env.SUPABASE_URL,
+      c.env.SUPABASE_ANON_KEY
+    );
 
-    if (storageError) {
-      console.error('ストレージ削除エラー:', storageError);
+    // 動画とサムネイルを削除
+    try {
+      await storageService.deleteVideo(video.file_path, video.thumbnail_path);
+    } catch (error) {
+      console.error('ストレージ削除エラー:', error);
       // ストレージ削除に失敗してもデータベースからは削除を試みる
     }
 
@@ -233,11 +343,16 @@ export const videoController = {
 
   // 動画の処理開始（文字起こし・要約）
   async processVideo(c: Context) {
+    console.log('動画処理を開始します');
     const user = getUser(c);
     const videoId = c.req.param('id');
+    console.log(`動画ID: ${videoId}, ユーザーID: ${user.id}`);
+
     const supabase = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY);
+    console.log('Supabaseクライアントを初期化しました');
 
     // 動画の情報を取得
+    console.log('動画情報を取得します');
     const { data: video, error: fetchError } = await supabase
       .from('videos')
       .select('*')
@@ -246,10 +361,19 @@ export const videoController = {
       .single();
 
     if (fetchError || !video) {
+      console.error('動画が見つかりません:', fetchError);
       throw new HTTPException(404, { message: '動画が見つかりません' });
     }
 
+    console.log('動画情報を取得しました:', {
+      id: video.id,
+      title: video.title,
+      file_path: video.file_path,
+      thumbnail_path: video.thumbnail_path || 'なし',
+    });
+
     // 処理中に更新
+    console.log('動画ステータスを「処理中」に更新します');
     const { error: updateError } = await supabase
       .from('videos')
       .update({ status: 'processing', progress: 0 })
@@ -260,11 +384,14 @@ export const videoController = {
       throw new HTTPException(500, { message: '動画の処理開始に失敗しました' });
     }
 
+    console.log('動画ステータスを「処理中」に更新しました');
+
     // ここで非同期処理を開始（実際の実装ではバックグラウンドジョブやWebhookを使用）
     // この例では簡略化のため、すぐに成功レスポンスを返す
 
     // OpenAI APIキーの確認
     if (!c.env.OPENAI_API_KEY) {
+      console.error('OpenAI APIキーが設定されていません');
       // APIキーがない場合はエラーを返す
       await supabase
         .from('videos')
@@ -281,15 +408,89 @@ export const videoController = {
       });
     }
 
+    console.log('OpenAI APIキーが設定されています');
+
     // 非同期処理を開始
     // 注意: 実際の実装ではバックグラウンドジョブやWebhookを使用すべき
     // この実装はデモンストレーション用で、リクエスト/レスポンスサイクル内で処理を行うため推奨されません
     try {
+      console.log('非同期処理を開始します');
       // 処理開始のレスポンスを返す
       c.executionCtx.waitUntil(
         (async () => {
           try {
+            // サムネイル生成処理
+            if (!video.thumbnail_path) {
+              console.log('サムネイル生成処理を開始します');
+              // EdgeFunctionThumbnailServiceを使用してサムネイルを生成
+              console.log('EdgeFunctionThumbnailServiceを初期化します');
+              const edgeFunctionService = new EdgeFunctionThumbnailService(
+                c.env.SUPABASE_URL,
+                c.env.SUPABASE_ANON_KEY
+              );
+
+              console.log('環境変数の確認:');
+              console.log(
+                'SUPABASE_URL:',
+                c.env.SUPABASE_URL ? '設定済み' : '未設定'
+              );
+              console.log(
+                'SUPABASE_ANON_KEY:',
+                c.env.SUPABASE_ANON_KEY ? '設定済み' : '未設定'
+              );
+              console.log(
+                'TEAMIND_SUPABASE_PROJECT_REF:',
+                process.env.TEAMIND_SUPABASE_PROJECT_REF ? '設定済み' : '未設定'
+              );
+              console.log(
+                'TEAMIND_SUPABASE_URL:',
+                process.env.TEAMIND_SUPABASE_URL ? '設定済み' : '未設定'
+              );
+              console.log(
+                'TEAMIND_SUPABASE_ANON_KEY:',
+                process.env.TEAMIND_SUPABASE_ANON_KEY ? '設定済み' : '未設定'
+              );
+              console.log(
+                'TEAMIND_SUPABASE_SERVICE_ROLE_KEY:',
+                process.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY
+                  ? '設定済み'
+                  : '未設定'
+              );
+
+              console.log('generateThumbnailを呼び出します');
+              const thumbnailResult =
+                await edgeFunctionService.generateThumbnail(
+                  videoId,
+                  video.file_path,
+                  user.id
+                );
+
+              // サムネイル情報を更新
+              if (thumbnailResult) {
+                console.log('サムネイル生成に成功しました:', {
+                  thumbnailPath: thumbnailResult.thumbnailPath,
+                  thumbnailUrl:
+                    thumbnailResult.thumbnailUrl.substring(0, 30) + '...',
+                });
+
+                console.log('サムネイル情報をデータベースに更新します');
+                await supabase
+                  .from('videos')
+                  .update({
+                    thumbnail_path: thumbnailResult.thumbnailPath,
+                    thumbnail_url: thumbnailResult.thumbnailUrl,
+                  })
+                  .eq('id', videoId);
+                console.log('サムネイル情報の更新が完了しました');
+              } else {
+                console.error('サムネイル生成に失敗しました');
+              }
+            } else {
+              console.log('サムネイルは既に存在します:', video.thumbnail_path);
+            }
+
             // WhisperServiceのインスタンスを作成
+            console.log('WhisperServiceを初期化します');
             const whisperService = new WhisperService(
               c.env.SUPABASE_URL,
               c.env.SUPABASE_ANON_KEY,
@@ -297,11 +498,13 @@ export const videoController = {
             );
 
             // 文字起こし処理を実行
+            console.log('文字起こし処理を開始します');
             await whisperService.transcribeVideo(
               videoId,
               video.file_path,
               user.id
             );
+            console.log('文字起こし処理が完了しました');
           } catch (error) {
             console.error(
               `動画ID ${videoId} の処理中にエラーが発生しました:`,
@@ -339,7 +542,7 @@ export const videoController = {
 
     const { data: video, error } = await supabase
       .from('videos')
-      .select('status, error_message, progress')
+      .select('status, error_message, progress, thumbnail_url')
       .eq('id', videoId)
       .eq('user_id', user.id)
       .single();
@@ -356,6 +559,7 @@ export const videoController = {
       status: video.status,
       errorMessage: video.error_message || null,
       progress: video.progress || 0,
+      thumbnailUrl: video.thumbnail_url || null,
     });
   },
 };
