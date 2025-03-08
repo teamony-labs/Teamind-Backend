@@ -6,6 +6,21 @@ import { getUser } from '../utils/auth';
 import { StorageService } from '../services/storageService';
 import { WhisperService } from '../services/whisperService';
 import { EdgeFunctionThumbnailService } from '../services/edge-function-thumbnail';
+import type { Video } from '../types/video';
+
+// Supabase環境変数を取得する関数
+function getSupabaseEnv(c: Context) {
+  const supabaseUrl = c.env.TEAMIND_SUPABASE_URL || c.env.SUPABASE_URL;
+  const supabaseAnonKey =
+    c.env.TEAMIND_SUPABASE_ANON_KEY || c.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    console.error('Supabase環境変数が設定されていません');
+    throw new HTTPException(500, { message: 'サーバー設定エラー' });
+  }
+
+  return { supabaseUrl, supabaseAnonKey };
+}
 // 動画アップロードのバリデーションスキーマ
 const uploadVideoSchema = z.object({
   title: z
@@ -37,7 +52,22 @@ export const videoController = {
   // 動画一覧の取得
   async listVideos(c: Context) {
     const user = getUser(c);
-    const supabase = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY);
+    const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv(c);
+
+    // サービスロールキーを取得
+    const serviceRoleKey =
+      c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+      c.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceRoleKey) {
+      console.error('サービスロールキーが設定されていません');
+      throw new HTTPException(500, { message: 'サーバー設定エラー' });
+    }
+
+    // 常にサービスロールキーを使用してSupabaseクライアントを初期化
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    console.log(
+      'サービスロールキーを使用してSupabaseクライアントを初期化しました'
+    );
 
     const { data, error } = await supabase
       .from('videos')
@@ -52,10 +82,19 @@ export const videoController = {
 
     // 署名付きURLを更新
     if (data && data.length > 0) {
-      const storageService = new StorageService(
-        c.env.SUPABASE_URL,
-        c.env.SUPABASE_ANON_KEY
-      );
+      const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv(c);
+
+      // サービスロールキーを取得
+      const serviceRoleKey =
+        c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+        c.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!serviceRoleKey) {
+        console.error('サービスロールキーが設定されていません');
+        throw new HTTPException(500, { message: 'サーバー設定エラー' });
+      }
+
+      // サービスロールキーを使用してストレージサービスを初期化
+      const storageService = new StorageService(supabaseUrl, serviceRoleKey);
 
       // 各動画の署名付きURLを更新
       for (const video of data) {
@@ -81,7 +120,7 @@ export const videoController = {
 
     // フロントエンドで期待される形式に変換（thumbnail_url → thumbnailUrl）
     return c.json({
-      videos: data.map((video) => ({
+      videos: data.map((video: Video) => ({
         ...video,
         thumbnailUrl: video.thumbnail_url || null,
       })),
@@ -139,10 +178,22 @@ export const videoController = {
 
       // ストレージサービスの初期化
       console.log('ストレージサービスを初期化します');
-      const storageService = new StorageService(
-        c.env.SUPABASE_URL,
-        c.env.SUPABASE_ANON_KEY
+      const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv(c);
+
+      // サービスロールキーを取得
+      const serviceRoleKey =
+        c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+        c.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (!serviceRoleKey) {
+        console.error('サービスロールキーが設定されていません');
+        throw new HTTPException(500, { message: 'サーバー設定エラー' });
+      }
+
+      // サービスロールキーを使用してストレージサービスを初期化
+      console.log(
+        'サービスロールキーを使用してストレージサービスを初期化します'
       );
+      const storageService = new StorageService(supabaseUrl, serviceRoleKey);
 
       // 動画のアップロード（サムネイル生成も含む）
       console.log('動画のアップロードを開始します');
@@ -155,9 +206,10 @@ export const videoController = {
 
       // Supabaseにメタデータを保存
       console.log('Supabaseクライアントを初期化します');
-      const supabase = createClient(
-        c.env.SUPABASE_URL,
-        c.env.SUPABASE_ANON_KEY
+      // 常にサービスロールキーを使用してSupabaseクライアントを初期化
+      const supabase = createClient(supabaseUrl, serviceRoleKey);
+      console.log(
+        'サービスロールキーを使用してSupabaseクライアントを初期化しました'
       );
 
       // 保存するデータを準備
@@ -202,9 +254,10 @@ export const videoController = {
 
       console.log('動画メタデータ保存成功:', data.id);
       // サムネイル生成処理を追加
+      // サービスロールキーを使用してEdgeFunctionThumbnailServiceを初期化
       const edgeFunctionService = new EdgeFunctionThumbnailService(
-        c.env.SUPABASE_URL,
-        c.env.SUPABASE_ANON_KEY
+        supabaseUrl,
+        serviceRoleKey
       );
 
       // サムネイル生成を開始
@@ -252,7 +305,22 @@ export const videoController = {
   async getVideo(c: Context) {
     const user = getUser(c);
     const videoId = c.req.param('id');
-    const supabase = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY);
+    const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv(c);
+
+    // サービスロールキーを取得
+    const serviceRoleKey =
+      c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+      c.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceRoleKey) {
+      console.error('サービスロールキーが設定されていません');
+      throw new HTTPException(500, { message: 'サーバー設定エラー' });
+    }
+
+    // 常にサービスロールキーを使用してSupabaseクライアントを初期化
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    console.log(
+      'サービスロールキーを使用してSupabaseクライアントを初期化しました'
+    );
 
     // 動画の情報を取得
     const { data: video, error } = await supabase
@@ -267,10 +335,8 @@ export const videoController = {
     }
 
     // 署名付きURLを更新（期限切れの可能性があるため）
-    const storageService = new StorageService(
-      c.env.SUPABASE_URL,
-      c.env.SUPABASE_ANON_KEY
-    );
+    // サービスロールキーを使用してストレージサービスを初期化
+    const storageService = new StorageService(supabaseUrl, serviceRoleKey);
 
     try {
       // 動画ファイルのURLを更新
@@ -298,7 +364,22 @@ export const videoController = {
   async deleteVideo(c: Context) {
     const user = getUser(c);
     const videoId = c.req.param('id');
-    const supabase = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY);
+    const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv(c);
+
+    // サービスロールキーを取得
+    const serviceRoleKey =
+      c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+      c.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceRoleKey) {
+      console.error('サービスロールキーが設定されていません');
+      throw new HTTPException(500, { message: 'サーバー設定エラー' });
+    }
+
+    // 常にサービスロールキーを使用してSupabaseクライアントを初期化
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    console.log(
+      'サービスロールキーを使用してSupabaseクライアントを初期化しました'
+    );
 
     // 動画の情報を取得
     const { data: video, error: fetchError } = await supabase
@@ -313,10 +394,8 @@ export const videoController = {
     }
 
     // ストレージサービスを初期化
-    const storageService = new StorageService(
-      c.env.SUPABASE_URL,
-      c.env.SUPABASE_ANON_KEY
-    );
+    // サービスロールキーを使用してストレージサービスを初期化
+    const storageService = new StorageService(supabaseUrl, serviceRoleKey);
 
     // 動画とサムネイルを削除
     try {
@@ -348,8 +427,22 @@ export const videoController = {
     const videoId = c.req.param('id');
     console.log(`動画ID: ${videoId}, ユーザーID: ${user.id}`);
 
-    const supabase = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY);
-    console.log('Supabaseクライアントを初期化しました');
+    const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv(c);
+
+    // サービスロールキーを取得
+    const serviceRoleKey =
+      c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+      c.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceRoleKey) {
+      console.error('サービスロールキーが設定されていません');
+      throw new HTTPException(500, { message: 'サーバー設定エラー' });
+    }
+
+    // 常にサービスロールキーを使用してSupabaseクライアントを初期化
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    console.log(
+      'サービスロールキーを使用してSupabaseクライアントを初期化しました'
+    );
 
     // 動画の情報を取得
     console.log('動画情報を取得します');
@@ -424,9 +517,19 @@ export const videoController = {
               console.log('サムネイル生成処理を開始します');
               // EdgeFunctionThumbnailServiceを使用してサムネイルを生成
               console.log('EdgeFunctionThumbnailServiceを初期化します');
+              // サービスロールキーを取得
+              const serviceRoleKey =
+                c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+                c.env.SUPABASE_SERVICE_ROLE_KEY;
+              if (!serviceRoleKey) {
+                console.error('サービスロールキーが設定されていません');
+                throw new Error('サーバー設定エラー');
+              }
+
+              // サービスロールキーを使用してEdgeFunctionThumbnailServiceを初期化
               const edgeFunctionService = new EdgeFunctionThumbnailService(
-                c.env.SUPABASE_URL,
-                c.env.SUPABASE_ANON_KEY
+                supabaseUrl,
+                serviceRoleKey
               );
 
               console.log('環境変数の確認:');
@@ -491,9 +594,20 @@ export const videoController = {
 
             // WhisperServiceのインスタンスを作成
             console.log('WhisperServiceを初期化します');
+
+            // サービスロールキーを取得
+            const serviceRoleKey =
+              c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+              c.env.SUPABASE_SERVICE_ROLE_KEY;
+            if (!serviceRoleKey) {
+              console.error('サービスロールキーが設定されていません');
+              throw new Error('サーバー設定エラー');
+            }
+
+            // サービスロールキーを使用してWhisperServiceを初期化
             const whisperService = new WhisperService(
-              c.env.SUPABASE_URL,
-              c.env.SUPABASE_ANON_KEY,
+              supabaseUrl,
+              serviceRoleKey, // サービスロールキーを使用
               c.env.VIDEO_BUCKET
             );
 
@@ -538,7 +652,22 @@ export const videoController = {
   async getVideoStatus(c: Context) {
     const user = getUser(c);
     const videoId = c.req.param('id');
-    const supabase = createClient(c.env.SUPABASE_URL, c.env.SUPABASE_ANON_KEY);
+    const { supabaseUrl, supabaseAnonKey } = getSupabaseEnv(c);
+
+    // サービスロールキーを取得
+    const serviceRoleKey =
+      c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
+      c.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!serviceRoleKey) {
+      console.error('サービスロールキーが設定されていません');
+      throw new HTTPException(500, { message: 'サーバー設定エラー' });
+    }
+
+    // 常にサービスロールキーを使用してSupabaseクライアントを初期化
+    const supabase = createClient(supabaseUrl, serviceRoleKey);
+    console.log(
+      'サービスロールキーを使用してSupabaseクライアントを初期化しました'
+    );
 
     const { data: video, error } = await supabase
       .from('videos')
