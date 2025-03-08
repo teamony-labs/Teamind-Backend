@@ -6,9 +6,28 @@ import { HTTPException } from 'hono/http-exception';
  */
 export class EdgeFunctionThumbnailService {
   private supabase;
+  private supabaseUrl: string;
+  private supabaseKey: string;
+  private projectRef: string;
 
   constructor(supabaseUrl: string, supabaseKey: string) {
     this.supabase = createClient(supabaseUrl, supabaseKey);
+    this.supabaseUrl = supabaseUrl;
+    this.supabaseKey = supabaseKey;
+
+    // Supabase URLからプロジェクトリファレンスを抽出
+    // 例: https://peaisulsqsahiscuwddj.supabase.co -> peaisulsqsahiscuwddj
+    const match = supabaseUrl.match(/https:\/\/([^.]+)\.supabase\.co/);
+    this.projectRef = match ? match[1] : '';
+
+    if (!this.projectRef) {
+      console.error(
+        'Supabase URLからプロジェクトリファレンスを抽出できませんでした:',
+        supabaseUrl
+      );
+    } else {
+      console.log('Supabaseプロジェクトリファレンス:', this.projectRef);
+    }
   }
 
   /**
@@ -22,34 +41,30 @@ export class EdgeFunctionThumbnailService {
     try {
       console.log('Edge Function サムネイル生成開始:', videoId);
 
-      // 環境変数の確認（TEAMINDプレフィックスを使用）
-      if (!process.env.TEAMIND_SUPABASE_PROJECT_REF) {
-        console.error(
-          'TEAMIND_SUPABASE_PROJECT_REF環境変数が設定されていません'
-        );
+      // プロジェクトリファレンスの確認
+      if (!this.projectRef) {
+        console.error('Supabaseプロジェクトリファレンスが設定されていません');
         return null;
       }
 
       // Edge Functionを呼び出すURL
-      const edgeFunctionUrl = `https://${process.env.TEAMIND_SUPABASE_PROJECT_REF}.functions.supabase.co/generate-thumbnail`;
+      const edgeFunctionUrl = `https://${this.projectRef}.functions.supabase.co/generate-thumbnail`;
 
       console.log('Edge Function URL:', edgeFunctionUrl);
 
-      // Edge Functionを呼び出す（TEAMINDプレフィックスを使用）
+      // Edge Functionを呼び出す
       const response = await fetch(edgeFunctionUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${
-            process.env.TEAMIND_SUPABASE_ANON_KEY || ''
-          }`,
+          Authorization: `Bearer ${this.supabaseKey}`,
         },
         body: JSON.stringify({
           videoId,
           filePath,
           userId,
-          supabaseUrl: process.env.TEAMIND_SUPABASE_URL || '',
-          supabaseKey: process.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY || '', // 重要: サービスロールキーを使用
+          supabaseUrl: this.supabaseUrl,
+          supabaseKey: this.supabaseKey, // サービスロールキーを使用
         }),
       });
 
