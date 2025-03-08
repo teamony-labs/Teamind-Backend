@@ -16,4 +16,5 @@ export interface Video {
   progress?: number;
   duration: number;
   created_at: string;
+  thumbnail_url?: string;
 }
