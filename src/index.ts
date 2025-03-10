@@ -5,6 +5,7 @@ import { prettyJSON } from 'hono/pretty-json';
 import videoRoutes from './routes/videos';
 import transcriptRoutes from './routes/transcripts';
 import summaryRoutes from './routes/summaries';
+import thumbnailRoutes from './routes/api/thumbnails';
 import { errorMiddleware } from './middleware/error';
 import { corsMiddleware } from './middleware/cors';
 
@@ -15,6 +16,7 @@ type Bindings = {
   ANTHROPIC_API_KEY: string;
   OPENAI_API_KEY: string;
   VIDEO_BUCKET: R2Bucket;
+  CLOUDINARY_URL: string; // Cloudinary URL for thumbnail generation
 };
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -33,5 +35,6 @@ app.get('/', (c) => c.text('Teamind API is running'));
 app.route('/api/videos', videoRoutes);
 app.route('/api/transcripts', transcriptRoutes);
 app.route('/api/summaries', summaryRoutes);
+app.route('/api/thumbnails', thumbnailRoutes);
 
 export default app;
