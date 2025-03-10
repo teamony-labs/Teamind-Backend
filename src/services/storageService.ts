@@ -266,19 +266,22 @@ export class StorageService {
   async getSignedUrl(
     filePath: string,
     expiresIn: number = 60 * 60
-  ): Promise<string> {
-    const { data, error } = await this.supabase.storage
-      .from('videos')
-      .createSignedUrl(filePath, expiresIn);
+  ): Promise<string | null> {
+    try {
+      const { data, error } = await this.supabase.storage
+        .from('videos')
+        .createSignedUrl(filePath, expiresIn);
 
-    if (error || !data || !data.signedUrl) {
+      if (error || !data || !data.signedUrl) {
+        console.error('署名付きURL生成エラー:', error);
+        return null;
+      }
+
+      return data.signedUrl;
+    } catch (error) {
       console.error('署名付きURL生成エラー:', error);
-      throw new HTTPException(500, {
-        message: '署名付きURLの生成に失敗しました',
-      });
+      return null;
     }
-
-    return data.signedUrl;
   }
 
   /**
