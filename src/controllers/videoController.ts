@@ -5,7 +5,7 @@ import { HTTPException } from 'hono/http-exception';
 import { getUser } from '../utils/auth';
 import { StorageService } from '../services/storageService';
 import { WhisperService } from '../services/whisperService';
-import { EdgeFunctionThumbnailService } from '../services/edge-function-thumbnail';
+import { thumbnailService } from '../services/thumbnailService';
 import type { Video } from '../types/video';
 
 // Supabase環境変数を取得する関数
@@ -100,7 +100,16 @@ export const videoController = {
       for (const video of data) {
         try {
           // 動画ファイルのURLを更新
-          video.file_url = await storageService.getSignedUrl(video.file_path);
+          const fileUrl = await storageService.getSignedUrl(video.file_path);
+          if (fileUrl) {
+            video.file_url = fileUrl;
+          } else {
+            console.log(
+              `動画ID ${video.id} のファイルが見つかりません:`,
+              video.file_path
+            );
+            // ファイルが見つからない場合は、既存のURLを維持
+          }
 
           // サムネイルURLを更新（存在する場合）
           if (video.thumbnail_path) {
@@ -254,17 +263,14 @@ export const videoController = {
 
       console.log('動画メタデータ保存成功:', data.id);
       // サムネイル生成処理を追加
-      // サービスロールキーを使用してEdgeFunctionThumbnailServiceを初期化
-      const edgeFunctionService = new EdgeFunctionThumbnailService(
-        supabaseUrl,
-        serviceRoleKey
-      );
+      console.log('thumbnailServiceを使用してサムネイル生成を開始します');
 
       // サムネイル生成を開始
-      const thumbnailResult = await edgeFunctionService.generateThumbnail(
+      const thumbnailResult = await thumbnailService.generateThumbnail(
         data.id,
         filePath,
-        user.id
+        user.id,
+        c.env
       );
 
       if (thumbnailResult) {
@@ -341,7 +347,15 @@ export const videoController = {
     try {
       // 動画ファイルのURLを更新
       const signedUrl = await storageService.getSignedUrl(video.file_path);
-      video.file_url = signedUrl;
+      if (signedUrl) {
+        video.file_url = signedUrl;
+      } else {
+        console.log(
+          `動画ID ${video.id} のファイルが見つかりません:`,
+          video.file_path
+        );
+        // ファイルが見つからない場合は、既存のURLを維持
+      }
 
       // サムネイルURLを更新（存在する場合）
       if (video.thumbnail_path) {
@@ -515,21 +529,8 @@ export const videoController = {
             // サムネイル生成処理
             if (!video.thumbnail_path) {
               console.log('サムネイル生成処理を開始します');
-              // EdgeFunctionThumbnailServiceを使用してサムネイルを生成
-              console.log('EdgeFunctionThumbnailServiceを初期化します');
-              // サービスロールキーを取得
-              const serviceRoleKey =
-                c.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY ||
-                c.env.SUPABASE_SERVICE_ROLE_KEY;
-              if (!serviceRoleKey) {
-                console.error('サービスロールキーが設定されていません');
-                throw new Error('サーバー設定エラー');
-              }
-
-              // サービスロールキーを使用してEdgeFunctionThumbnailServiceを初期化
-              const edgeFunctionService = new EdgeFunctionThumbnailService(
-                supabaseUrl,
-                serviceRoleKey
+              console.log(
+                'thumbnailServiceを使用してサムネイル生成を開始します'
               );
 
               console.log('環境変数の確認:');
@@ -542,31 +543,17 @@ export const videoController = {
                 c.env.SUPABASE_ANON_KEY ? '設定済み' : '未設定'
               );
               console.log(
-                'TEAMIND_SUPABASE_PROJECT_REF:',
-                process.env.TEAMIND_SUPABASE_PROJECT_REF ? '設定済み' : '未設定'
-              );
-              console.log(
-                'TEAMIND_SUPABASE_URL:',
-                process.env.TEAMIND_SUPABASE_URL ? '設定済み' : '未設定'
-              );
-              console.log(
-                'TEAMIND_SUPABASE_ANON_KEY:',
-                process.env.TEAMIND_SUPABASE_ANON_KEY ? '設定済み' : '未設定'
-              );
-              console.log(
-                'TEAMIND_SUPABASE_SERVICE_ROLE_KEY:',
-                process.env.TEAMIND_SUPABASE_SERVICE_ROLE_KEY
-                  ? '設定済み'
-                  : '未設定'
+                'CLOUDINARY_URL:',
+                c.env.CLOUDINARY_URL ? '設定済み' : '未設定'
               );
 
               console.log('generateThumbnailを呼び出します');
-              const thumbnailResult =
-                await edgeFunctionService.generateThumbnail(
-                  videoId,
-                  video.file_path,
-                  user.id
-                );
+              const thumbnailResult = await thumbnailService.generateThumbnail(
+                videoId,
+                video.file_path,
+                user.id,
+                c.env
+              );
 
               // サムネイル情報を更新
               if (thumbnailResult) {
